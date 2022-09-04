@@ -1,0 +1,14 @@
+version: '3'
+services:
+  rssbot:
+    build: .
+    image: crazycurly/rssbot
+    container_name: rssbot
+    volumes:
+      - ./database:/rustrssbot
+    environment:
+      - TELEGRAM_BOT_TOKEN=
+      - MAX_FEED_SIZE=2097152
+      - MAX_INTERVAL=43200
+      - MIN_INTERVAL=300
+    restart: always
