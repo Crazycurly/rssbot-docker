@@ -1,17 +1,17 @@
 use std::env;
 use std::time::Duration;
 
-use once_cell::sync::OnceCell;
 use reqwest::{
     self,
     header::{HeaderValue, CONTENT_TYPE},
 };
+use std::sync::OnceLock;
 use thiserror::Error;
 
 use crate::feed::Rss;
 
-static RESP_SIZE_LIMIT: OnceCell<u64> = OnceCell::new();
-static CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
+static RESP_SIZE_LIMIT: OnceLock<u64> = OnceLock::new();
+static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 #[derive(Error, Debug)]
 pub enum FeedError {
@@ -28,10 +28,9 @@ impl FeedError {
         match self {
             Self::Network(source) => tr!("network_error", source = source),
             Self::Parsing(source) => tr!("parsing_error", source = source),
-            Self::TooLarge(limit) => tr!(
-                "rss_size_limit_exceeded",
-                size = format_byte_size((*limit).into())
-            ),
+            Self::TooLarge(limit) => {
+                tr!("rss_size_limit_exceeded", size = format_byte_size(*limit))
+            }
         }
     }
 }
@@ -153,7 +152,7 @@ mod test {
 
     #[test]
     fn max_format_byte_size() {
-        assert_eq!(format_byte_size(std::u64::MAX), "16EiB");
+        assert_eq!(format_byte_size(u64::MAX), "16EiB");
     }
 
     #[test]

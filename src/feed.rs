@@ -1,17 +1,16 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::str;
 
-use lazy_static::lazy_static;
 use quick_xml::events::attributes::Attributes;
 use quick_xml::events::BytesStart;
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader as XmlReader;
 use regex::Regex;
 use serde::Deserialize;
+use std::sync::LazyLock;
 
 trait FromXml: Sized {
     fn from_xml<B: std::io::BufRead>(
@@ -76,12 +75,11 @@ impl FromXml for SkipThisElement {
         let mut buf = bufs.pop();
         let mut depth = 1u64;
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Start(_)) => depth += 1,
-                Ok(XmlEvent::End(_)) if depth == 1 => break,
-                Ok(XmlEvent::End(_)) => depth -= 1,
-                Ok(XmlEvent::Eof) => break, // just ignore EOF
-                Err(err) => return Err(err.into()),
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Start(_) => depth += 1,
+                XmlEvent::End(_) if depth == 1 => break,
+                XmlEvent::End(_) => depth -= 1,
+                XmlEvent::Eof => break, // just ignore EOF
                 _ => (),
             }
             buf.clear();
@@ -99,16 +97,15 @@ impl FromXml for Option<u32> {
         let mut buf = bufs.pop();
         let mut output = None;
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Start(ref e)) => {
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Start(ref e) => {
                     SkipThisElement::from_xml(bufs, reader, e)?;
                 }
-                Ok(XmlEvent::Text(ref e)) => {
+                XmlEvent::Text(ref e) => {
                     let text = reader.decode(e);
                     output = text.parse().ok();
                 }
-                Ok(XmlEvent::End(_)) | Ok(XmlEvent::Eof) => break,
-                Err(err) => return Err(err.into()),
+                XmlEvent::End(_) | XmlEvent::Eof => break,
                 _ => (),
             }
             buf.clear();
@@ -126,20 +123,19 @@ impl FromXml for Option<String> {
         let mut buf = bufs.pop();
         let mut content: Option<String> = None;
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Start(ref e)) => {
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Start(ref e) => {
                     SkipThisElement::from_xml(bufs, reader, e)?;
                 }
-                Ok(XmlEvent::Text(ref e)) => {
+                XmlEvent::Text(ref e) => {
                     let text = e.unescape_and_decode(reader)?;
                     content = Some(text);
                 }
-                Ok(XmlEvent::CData(ref e)) => {
+                XmlEvent::CData(ref e) => {
                     let text = reader.decode(e).to_string();
                     content = Some(text);
                 }
-                Ok(XmlEvent::End(_)) | Ok(XmlEvent::Eof) => break,
-                Err(err) => return Err(err.into()),
+                XmlEvent::End(_) | XmlEvent::Eof => break,
                 _ => (),
             }
             buf.clear();
@@ -174,8 +170,8 @@ impl FromXml for Rss {
         let mut sy_freq: Option<u32> = None;
 
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Empty(ref e)) => {
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Empty(ref e) => {
                     if reader.decode(e.local_name()) == "link" {
                         match parse_atom_link(reader, e.attributes())? {
                             Some(AtomLink::Alternate(link)) => rss.link = link,
@@ -184,7 +180,7 @@ impl FromXml for Rss {
                         }
                     }
                 }
-                Ok(XmlEvent::Start(ref e)) => {
+                XmlEvent::Start(ref e) => {
                     match &*reader.decode(e.local_name()) {
                         "channel" => {
                             // RSS 0.9 1.0
@@ -229,12 +225,11 @@ impl FromXml for Rss {
                         }
                     }
                 }
-                Ok(XmlEvent::End(_)) if reading_rss_1_0_head => {
+                XmlEvent::End(_) if reading_rss_1_0_head => {
                     // reader.decode(e.local_name())? == "channel";
                     reading_rss_1_0_head = false;
                 }
-                Ok(XmlEvent::End(_)) | Ok(XmlEvent::Eof) => break,
-                Err(err) => return Err(err.into()),
+                XmlEvent::End(_) | XmlEvent::Eof => break,
                 _ => (),
             }
             buf.clear();
@@ -271,8 +266,8 @@ impl FromXml for Item {
         let mut buf = bufs.pop();
         let mut item = Item::default();
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Empty(ref e)) => {
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Empty(ref e) => {
                     if reader.decode(e.name()) == "link" {
                         if let Some(AtomLink::Alternate(link)) =
                             parse_atom_link(reader, e.attributes())?
@@ -281,7 +276,7 @@ impl FromXml for Item {
                         }
                     }
                 }
-                Ok(XmlEvent::Start(ref e)) => {
+                XmlEvent::Start(ref e) => {
                     match &*reader.decode(e.name()) {
                         "title" => {
                             item.title = <Option<String> as FromXml>::from_xml(bufs, reader, e)?;
@@ -307,8 +302,7 @@ impl FromXml for Item {
                         }
                     }
                 }
-                Ok(XmlEvent::End(_)) | Ok(XmlEvent::Eof) => break,
-                Err(err) => return Err(err.into()),
+                XmlEvent::End(_) | XmlEvent::Eof => break,
                 _ => (),
             }
             buf.clear();
@@ -335,11 +329,11 @@ impl FromXml for Option<SyPeriod> {
         let mut buf = bufs.pop();
         let mut output = None;
         loop {
-            match reader.read_event(&mut buf) {
-                Ok(XmlEvent::Start(ref e)) => {
+            match reader.read_event(&mut buf)? {
+                XmlEvent::Start(ref e) => {
                     SkipThisElement::from_xml(bufs, reader, e)?;
                 }
-                Ok(XmlEvent::Text(ref e)) => {
+                XmlEvent::Text(ref e) => {
                     let period = match &*reader.decode(e) {
                         "hourly" => SyPeriod::Hourly,
                         "daily" => SyPeriod::Daily,
@@ -350,8 +344,7 @@ impl FromXml for Option<SyPeriod> {
                     };
                     output = Some(period);
                 }
-                Ok(XmlEvent::End(_)) | Ok(XmlEvent::Eof) => break,
-                Err(err) => return Err(err.into()),
+                XmlEvent::End(_) | XmlEvent::Eof => break,
                 _ => (),
             }
             buf.clear();
@@ -367,8 +360,8 @@ pub fn parse<B: std::io::BufRead>(reader: B) -> quick_xml::Result<Rss> {
     let bufs = BufPool::new(4, 512);
     let mut buf = bufs.pop();
     loop {
-        match reader.read_event(&mut buf) {
-            Ok(XmlEvent::Start(ref e)) => match &*reader.decode(e.name()) {
+        match reader.read_event(&mut buf)? {
+            XmlEvent::Start(ref e) => match &*reader.decode(e.name()) {
                 "rss" => continue,
                 "channel" | "feed" | "rdf:RDF" => {
                     return Rss::from_xml(&bufs, &mut reader, e);
@@ -377,8 +370,7 @@ pub fn parse<B: std::io::BufRead>(reader: B) -> quick_xml::Result<Rss> {
                     SkipThisElement::from_xml(&bufs, &mut reader, e)?;
                 }
             },
-            Ok(XmlEvent::Eof) => return Err(quick_xml::Error::UnexpectedEof("feed".to_string())),
-            Err(err) => return Err(err.into()),
+            XmlEvent::Eof => return Err(quick_xml::Error::UnexpectedEof("feed".to_string())),
             _ => (),
         }
         buf.clear();
@@ -402,9 +394,7 @@ fn url_relative_to_absolute(link: &mut String, host: &str) {
 }
 
 pub fn fix_relative_url(mut rss: Rss, rss_link: &str) -> Rss {
-    lazy_static! {
-        static ref HOST: Regex = Regex::new(r"^(https?://[^/]+)").unwrap();
-    }
+    static HOST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(https?://[^/]+)").unwrap());
     let rss_host = HOST
         .captures(rss_link)
         .map_or(rss_link, |r| r.get(0).unwrap().as_str());
@@ -453,9 +443,7 @@ struct Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        self.pool
-            .borrow_mut()
-            .push(mem::replace(&mut self.inner, Vec::new()))
+        self.pool.borrow_mut().push(std::mem::take(&mut self.inner))
     }
 }
 
@@ -736,7 +724,7 @@ mod test {
 
     #[test]
     fn atom_link_parsing() {
-        let data = vec![
+        let data = [
             r#"<link href="alternate href" />"#,
             r#"<link href="alternate href" rel="alternate" />"#,
             r#"<link href="self href" rel="self" />"#,
